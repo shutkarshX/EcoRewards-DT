@@ -1,0 +1,937 @@
+import { useState, useEffect, useCallback } from "react";
+
+// ─── Seed Data & Helpers ───────────────────────────────────────────────────
+const POINTS_PER_KG = 10;
+const MAX_WEIGHT_GRAMS = 5000;
+const MAX_DAILY_SUBMISSIONS = 3;
+
+const WASTE_TYPES = [
+  { id: "dry", label: "Dry Waste", icon: "📄", color: "#c8a87a", desc: "Paper, cardboard, metal" },
+  { id: "wet", label: "Wet Waste", icon: "🥬", color: "#5a9e6f", desc: "Food, organic matter" },
+  { id: "plastic", label: "Plastic", icon: "♻️", color: "#4a90d9", desc: "Bottles, bags, packaging" },
+];
+
+const INITIAL_REWARDS = [
+  { id: "r1", name: "₹10 Off at Canteen", points: 50, icon: "🍽️", category: "Food", stock: 20 },
+  { id: "r2", name: "Free Samosa Snack", points: 80, icon: "🧆", category: "Food", stock: 15 },
+  { id: "r3", name: "₹25 Canteen Voucher", points: 150, icon: "🎟️", category: "Voucher", stock: 10 },
+  { id: "r4", name: "Stationery Pack", points: 200, icon: "✏️", category: "Gift", stock: 5 },
+  { id: "r5", name: "Free Coffee/Tea", points: 60, icon: "☕", category: "Food", stock: 30 },
+  { id: "r6", name: "₹50 Book Store Credit", points: 300, icon: "📚", category: "Voucher", stock: 8 },
+];
+
+const INITIAL_USERS = [
+  { id: "u1", name: "Priya Sharma", email: "priya@college.edu", points: 340, avatar: "PS", joined: "2025-01-15" },
+  { id: "u2", name: "Arjun Mehta", email: "arjun@college.edu", points: 275, avatar: "AM", joined: "2025-01-20" },
+  { id: "u3", name: "Sneha Nair", email: "sneha@college.edu", points: 210, avatar: "SN", joined: "2025-02-01" },
+  { id: "u4", name: "Rahul Das", email: "rahul@college.edu", points: 190, avatar: "RD", joined: "2025-02-10" },
+  { id: "u5", name: "Kavya Reddy", email: "kavya@college.edu", points: 155, avatar: "KR", joined: "2025-02-15" },
+];
+
+const INITIAL_LOGS = [
+  { id: "l1", userId: "u1", wasteType: "dry", weightGrams: 800, points: 8, timestamp: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: "l2", userId: "u2", wasteType: "plastic", weightGrams: 1200, points: 12, timestamp: new Date(Date.now() - 86400000).toISOString() },
+  { id: "l3", userId: "u1", wasteType: "wet", weightGrams: 2000, points: 20, timestamp: new Date(Date.now() - 86400000).toISOString() },
+  { id: "l4", userId: "u3", wasteType: "dry", weightGrams: 500, points: 5, timestamp: new Date(Date.now() - 3600000 * 5).toISOString() },
+];
+
+const QUIZ_QUESTIONS = [
+  { q: "Where does a banana peel go?", options: ["Dry Waste", "Wet Waste", "Plastic", "Hazardous"], answer: 1 },
+  { q: "An empty plastic water bottle belongs in?", options: ["Wet Waste", "Hazardous", "Plastic", "Dry Waste"], answer: 2 },
+  { q: "Old newspapers should go in?", options: ["Wet Waste", "Dry Waste", "Plastic", "Hazardous"], answer: 1 },
+  { q: "Used cooking oil should be disposed as?", options: ["Wet Waste", "Dry Waste", "Plastic", "Hazardous"], answer: 3 },
+  { q: "A dead battery belongs in?", options: ["Dry Waste", "Wet Waste", "Plastic", "Hazardous"], answer: 3 },
+];
+
+const AWARENESS_TIPS = [
+  "Rinse plastic containers before recycling",
+  "Don't mix food scraps with dry recyclables",
+  "Crush plastic bottles to save bin space",
+  "Remove labels from glass before recycling",
+  "Compost wet waste when possible",
+];
+
+function getStorage(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+}
+function setStorage(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+
+function genId() { return Math.random().toString(36).slice(2, 10); }
+
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+function calcPoints(grams) { return Math.max(1, Math.floor((grams / 1000) * POINTS_PER_KG)); }
+
+// ─── Main App ──────────────────────────────────────────────────────────────
+export default function App() {
+  const [users, setUsers] = useState(() => getStorage("swrs_users", INITIAL_USERS));
+  const [logs, setLogs] = useState(() => getStorage("swrs_logs", INITIAL_LOGS));
+  const [rewards, setRewards] = useState(() => getStorage("swrs_rewards", INITIAL_REWARDS));
+  const [currentUser, setCurrentUser] = useState(() => getStorage("swrs_current", null));
+  const [page, setPage] = useState("home");
+  const [authMode, setAuthMode] = useState("login");
+  const [toast, setToast] = useState(null);
+  const [adminMode, setAdminMode] = useState(false);
+
+  useEffect(() => { setStorage("swrs_users", users); }, [users]);
+  useEffect(() => { setStorage("swrs_logs", logs); }, [logs]);
+  useEffect(() => { setStorage("swrs_rewards", rewards); }, [rewards]);
+  useEffect(() => { setStorage("swrs_current", currentUser); }, [currentUser]);
+
+  const showToast = useCallback((msg, type = "success") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  const login = useCallback((email, password) => {
+    const user = users.find(u => u.email === email);
+    if (!user) { showToast("No account found. Please sign up.", "error"); return false; }
+    setCurrentUser(user);
+    showToast(`Welcome back, ${user.name.split(" ")[0]}! 🌱`);
+    setPage("dispose");
+    return true;
+  }, [users, showToast]);
+
+  const signup = useCallback((name, email) => {
+    if (users.find(u => u.email === email)) { showToast("Email already registered.", "error"); return false; }
+    const newUser = { id: genId(), name, email, points: 10, avatar: name.split(" ").map(w => w[0]).join("").slice(0,2).toUpperCase(), joined: new Date().toISOString().slice(0,10) };
+    setUsers(u => [...u, newUser]);
+    setCurrentUser(newUser);
+    showToast(`Welcome to EcoRewards, ${name.split(" ")[0]}! You got 10 bonus points 🎉`);
+    setPage("dispose");
+    return true;
+  }, [users, showToast]);
+
+  const logout = useCallback(() => { setCurrentUser(null); setPage("home"); setAdminMode(false); }, []);
+
+  const submitDisposal = useCallback((wasteType, weightGrams) => {
+    if (!currentUser) return;
+    const today = todayStr();
+    const todayLogs = logs.filter(l => l.userId === currentUser.id && l.timestamp.startsWith(today));
+    if (todayLogs.length >= MAX_DAILY_SUBMISSIONS) {
+      showToast(`Daily limit of ${MAX_DAILY_SUBMISSIONS} submissions reached. Come back tomorrow!`, "error");
+      return false;
+    }
+    if (weightGrams > MAX_WEIGHT_GRAMS) {
+      showToast(`Maximum weight per entry is ${MAX_WEIGHT_GRAMS}g (${MAX_WEIGHT_GRAMS/1000}kg).`, "error");
+      return false;
+    }
+    const points = calcPoints(weightGrams);
+    const log = { id: genId(), userId: currentUser.id, wasteType, weightGrams, points, timestamp: new Date().toISOString() };
+    setLogs(l => [log, ...l]);
+    setUsers(us => us.map(u => u.id === currentUser.id ? { ...u, points: u.points + points } : u));
+    setCurrentUser(cu => ({ ...cu, points: cu.points + points }));
+    showToast(`+${points} points earned! Great job recycling! 🌿`);
+    return true;
+  }, [currentUser, logs, showToast]);
+
+  const redeemReward = useCallback((reward) => {
+    if (!currentUser) return;
+    if (currentUser.points < reward.points) { showToast("Not enough points!", "error"); return; }
+    setUsers(us => us.map(u => u.id === currentUser.id ? { ...u, points: u.points - reward.points } : u));
+    setCurrentUser(cu => ({ ...cu, points: cu.points - reward.points }));
+    setRewards(rs => rs.map(r => r.id === reward.id ? { ...r, stock: Math.max(0, r.stock - 1) } : r));
+    showToast(`🎉 "${reward.name}" redeemed! Show this at the canteen.`);
+  }, [currentUser, showToast]);
+
+  const totalWaste = logs.reduce((s, l) => s + l.weightGrams, 0);
+  const activeUsers = [...new Set(logs.map(l => l.userId))].length;
+
+  const navItems = [
+    { id: "home", label: "Home", icon: "🏠" },
+    { id: "dispose", label: "Dispose", icon: "♻️" },
+    { id: "rewards", label: "Rewards", icon: "🎁" },
+    { id: "learn", label: "Learn", icon: "📚" },
+    ...(currentUser ? [{ id: "profile", label: "Profile", icon: "👤" }] : []),
+    ...(adminMode ? [{ id: "admin", label: "Admin", icon: "⚙️" }] : []),
+  ];
+
+  return (
+    <div style={{ fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: "#f0f7f0", minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", boxShadow: "0 0 40px rgba(0,0,0,0.08)" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        input, select, textarea { font-family: inherit; }
+        button { font-family: inherit; cursor: pointer; border: none; }
+        ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #b5d4b5; border-radius: 4px; }
+        .nav-btn { background: none; padding: 8px 4px; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; color: #6b8c6b; transition: all 0.2s; border-radius: 8px; min-width: 52px; }
+        .nav-btn.active { color: #2d7a3a; }
+        .nav-btn .icon { font-size: 20px; }
+        .eco-btn { background: #2d7a3a; color: white; padding: 14px 28px; border-radius: 50px; font-size: 15px; font-weight: 600; transition: all 0.2s; letter-spacing: 0.3px; }
+        .eco-btn:hover { background: #235e2c; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(45,122,58,0.35); }
+        .eco-btn:active { transform: translateY(0); }
+        .eco-btn.outline { background: transparent; border: 2px solid #2d7a3a; color: #2d7a3a; }
+        .eco-btn.outline:hover { background: #2d7a3a; color: white; }
+        .card { background: white; border-radius: 20px; padding: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+        .tag { display: inline-block; padding: 3px 10px; border-radius: 50px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+        input[type="text"], input[type="email"], input[type="password"], input[type="number"], select {
+          width: 100%; padding: 13px 16px; border: 1.5px solid #dde8dd; border-radius: 12px; font-size: 15px; background: #f8faf8; outline: none; transition: border 0.2s;
+        }
+        input:focus, select:focus { border-color: #2d7a3a; background: white; }
+        .waste-chip { border: 2px solid transparent; border-radius: 16px; padding: 14px; cursor: pointer; transition: all 0.2s; background: #f8faf8; }
+        .waste-chip.selected { border-color: #2d7a3a; background: #eaf4eb; }
+        .pulse { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(45,122,58,0.4)} 50%{box-shadow:0 0 0 10px rgba(45,122,58,0)} }
+        .slide-up { animation: slideUp 0.4s ease; }
+        @keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+        .badge-medal { display: inline-block; font-size: 20px; }
+        .progress-bar { height: 8px; background: #e0ece0; border-radius: 50px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #2d7a3a, #4caf50); border-radius: 50px; transition: width 0.8s ease; }
+        .avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: white; flex-shrink: 0; }
+        .quiz-opt { padding: 12px 16px; border-radius: 12px; border: 2px solid #dde8dd; background: white; cursor: pointer; text-align: left; font-size: 14px; transition: all 0.2s; width: 100%; margin-bottom: 8px; font-family: inherit; }
+        .quiz-opt:hover { border-color: #2d7a3a; background: #f0f8f0; }
+        .quiz-opt.correct { border-color: #2d7a3a; background: #eaf4eb; color: #1a5c25; }
+        .quiz-opt.wrong { border-color: #e24b4a; background: #fdf0f0; color: #a32d2d; }
+        .leaderboard-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f0f5f0; }
+        .leaderboard-row:last-child { border: none; }
+        .stat-pill { background: #eaf4eb; color: #1a5c25; border-radius: 50px; padding: 6px 14px; font-size: 13px; font-weight: 600; }
+      `}</style>
+
+      {/* Header */}
+      <div style={{ background: "white", padding: "16px 20px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100, borderBottom: "1px solid #eaf4eb" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }} onClick={() => setPage("home")} className="eco-logo" style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 36, height: 36, background: "#2d7a3a", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🌿</div>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: "#1a3d1f" }}>EcoRewards</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {currentUser ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="stat-pill">🌟 {currentUser.points} pts</span>
+              <div className="avatar" style={{ background: "#2d7a3a", fontSize: 11, cursor: "pointer" }} onClick={() => setPage("profile")}>{currentUser.avatar}</div>
+            </div>
+          ) : (
+            <button className="eco-btn" style={{ padding: "8px 18px", fontSize: 13 }} onClick={() => { setAuthMode("login"); setPage("auth"); }}>Sign In</button>
+          )}
+        </div>
+      </div>
+
+      {/* Page Content */}
+      <div style={{ minHeight: "calc(100vh - 130px)", paddingBottom: 80 }}>
+        {page === "home" && <HomePage setPage={setPage} setAuthMode={setAuthMode} currentUser={currentUser} users={users} logs={logs} totalWaste={totalWaste} activeUsers={activeUsers} setAdminMode={setAdminMode} adminMode={adminMode} />}
+        {page === "auth" && <AuthPage mode={authMode} setMode={setAuthMode} login={login} signup={signup} setPage={setPage} />}
+        {page === "dispose" && <DisposePage currentUser={currentUser} setPage={setPage} setAuthMode={setAuthMode} submitDisposal={submitDisposal} logs={logs} />}
+        {page === "rewards" && <RewardsPage currentUser={currentUser} rewards={rewards} redeemReward={redeemReward} setPage={setPage} />}
+        {page === "learn" && <LearnPage currentUser={currentUser} users={users} setUsers={setUsers} setCurrentUser={setCurrentUser} showToast={showToast} />}
+        {page === "profile" && <ProfilePage currentUser={currentUser} users={users} logs={logs} logout={logout} setPage={setPage} />}
+        {page === "admin" && adminMode && <AdminPage users={users} setUsers={setUsers} logs={logs} rewards={rewards} setRewards={setRewards} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
+      </div>
+
+      {/* Bottom Nav */}
+      <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "white", borderTop: "1px solid #eaf4eb", display: "flex", justifyContent: "space-around", padding: "8px 4px 12px", zIndex: 100 }}>
+        {navItems.map(item => (
+          <button key={item.id} className={`nav-btn ${page === item.id ? "active" : ""}`} onClick={() => setPage(item.id)}>
+            <span className="icon">{item.icon}</span>
+            <span style={{ fontWeight: page === item.id ? 600 : 400 }}>{item.label}</span>
+          </button>
+        ))}
+        {!currentUser && (
+          <button className="nav-btn" onClick={() => { setAuthMode("login"); setPage("auth"); }}>
+            <span className="icon">🔑</span>
+            <span>Login</span>
+          </button>
+        )}
+        {currentUser && (
+          <button className="nav-btn" onClick={logout}>
+            <span className="icon">🚪</span>
+            <span>Logout</span>
+          </button>
+        )}
+      </div>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position: "fixed", top: 70, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "#e24b4a" : "#2d7a3a", color: "white", padding: "12px 20px", borderRadius: 50, fontSize: 14, fontWeight: 500, zIndex: 999, whiteSpace: "nowrap", maxWidth: "90vw", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)", animation: "slideUp 0.3s ease" }}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── HOME PAGE ─────────────────────────────────────────────────────────────
+function HomePage({ setPage, setAuthMode, currentUser, users, logs, totalWaste, activeUsers, setAdminMode, adminMode }) {
+  const sortedUsers = [...users].sort((a, b) => b.points - a.points).slice(0, 5);
+  const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"];
+  const tips = AWARENESS_TIPS;
+  const [tipIdx, setTipIdx] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTipIdx(i => (i + 1) % tips.length), 4000); return () => clearInterval(t); }, []);
+
+  return (
+    <div className="slide-up" style={{ padding: "0 16px" }}>
+      {/* Hero */}
+      <div style={{ background: "linear-gradient(135deg, #1a3d1f 0%, #2d7a3a 100%)", borderRadius: "0 0 32px 32px", margin: "0 -16px", padding: "36px 28px 40px", marginBottom: 24, position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", top: -20, right: -20, width: 120, height: 120, background: "rgba(255,255,255,0.05)", borderRadius: "50%" }} />
+        <div style={{ position: "absolute", bottom: -30, left: -10, width: 100, height: 100, background: "rgba(255,255,255,0.04)", borderRadius: "50%" }} />
+        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 2, color: "#a8e6b0", marginBottom: 10, textTransform: "uppercase" }}>Smart Campus Initiative</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "white", lineHeight: 1.25, marginBottom: 16 }}>Earn Rewards for<br />Saving the Planet 🌍</h1>
+        <p style={{ color: "#c5e8c8", fontSize: 14, lineHeight: 1.6, marginBottom: 24 }}>Scan any bin QR code, log your waste disposal, and earn points for eco-friendly actions on campus.</p>
+        <div style={{ display: "flex", gap: 12 }}>
+          {currentUser ? (
+            <button className="eco-btn pulse" style={{ background: "white", color: "#2d7a3a", fontSize: 14 }} onClick={() => setPage("dispose")}>
+              ♻️ Log Disposal
+            </button>
+          ) : (
+            <button className="eco-btn pulse" style={{ background: "white", color: "#2d7a3a", fontSize: 14 }} onClick={() => { setAuthMode("signup"); setPage("auth"); }}>
+              📱 Scan & Start
+            </button>
+          )}
+          <button className="eco-btn outline" style={{ borderColor: "rgba(255,255,255,0.5)", color: "white", fontSize: 14 }} onClick={() => setPage("learn")}>
+            Learn More
+          </button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 24 }}>
+        {[
+          { label: "Waste Collected", value: `${(totalWaste / 1000).toFixed(1)}kg`, icon: "🗑️" },
+          { label: "Active Users", value: activeUsers, icon: "👥" },
+          { label: "Points Given", value: logs.reduce((s, l) => s + l.points, 0), icon: "⭐" },
+        ].map(s => (
+          <div key={s.label} className="card" style={{ textAlign: "center", padding: "16px 10px" }}>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>{s.icon}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3d1f" }}>{s.value}</div>
+            <div style={{ fontSize: 10, color: "#7a9a7a", fontWeight: 500, marginTop: 2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Awareness Tip Ticker */}
+      <div style={{ background: "#eaf4eb", borderRadius: 14, padding: "12px 16px", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, border: "1px solid #c5e0c5" }}>
+        <span style={{ fontSize: 20 }}>💡</span>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#2d7a3a", textTransform: "uppercase", letterSpacing: 1, marginBottom: 3 }}>Eco Tip</div>
+          <div style={{ fontSize: 13, color: "#1a3d1f", fontWeight: 500 }}>{tips[tipIdx]}</div>
+        </div>
+      </div>
+
+      {/* Leaderboard */}
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: "#1a3d1f" }}>🏆 Top Recyclers</h2>
+          <span style={{ fontSize: 12, color: "#7a9a7a" }}>This Month</span>
+        </div>
+        {sortedUsers.map((u, i) => (
+          <div key={u.id} className="leaderboard-row">
+            <span style={{ fontSize: 20, minWidth: 28 }}>{medals[i]}</span>
+            <div className="avatar" style={{ background: ["#2d7a3a","#4a90d9","#c8a87a","#9b59b6","#e67e22"][i], fontSize: 11 }}>{u.avatar}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1a3d1f" }}>{u.name}</div>
+              <div style={{ fontSize: 11, color: "#7a9a7a" }}>{(users.find(x=>x.id===u.id) ? logs.filter(l=>l.userId===u.id).reduce((s,l)=>s+l.weightGrams,0)/1000 : 0).toFixed(1)} kg disposed</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#2d7a3a" }}>{u.points}</div>
+              <div style={{ fontSize: 10, color: "#7a9a7a" }}>pts</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Admin Access */}
+      <div style={{ textAlign: "center", marginBottom: 12 }}>
+        <button onClick={() => { setAdminMode(!adminMode); if (!adminMode) setPage("admin"); }} style={{ background: "none", color: "#aaa", fontSize: 11, padding: "6px 12px", borderRadius: 8, border: "1px solid #ddd" }}>
+          {adminMode ? "🔒 Exit Admin" : "⚙️ Admin Access"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── AUTH PAGE ─────────────────────────────────────────────────────────────
+function AuthPage({ mode, setMode, login, signup, setPage }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = () => {
+    if (!email) return;
+    if (mode === "login") login(email, password);
+    else { if (!name) return; signup(name, email); }
+  };
+
+  const demoLogin = () => login("priya@college.edu", "password");
+
+  return (
+    <div className="slide-up" style={{ padding: "24px 16px" }}>
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>🌿</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#1a3d1f", marginBottom: 8 }}>{mode === "login" ? "Welcome Back!" : "Join EcoRewards"}</h1>
+        <p style={{ color: "#7a9a7a", fontSize: 14 }}>{mode === "login" ? "Sign in to continue earning green points" : "Start earning rewards for eco-friendly actions"}</p>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        {mode === "signup" && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#5a7a5a", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Full Name</label>
+            <input type="text" placeholder="Your name" value={name} onChange={e => setName(e.target.value)} />
+          </div>
+        )}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "#5a7a5a", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Email</label>
+          <input type="email" placeholder="student@college.edu" value={email} onChange={e => setEmail(e.target.value)} />
+        </div>
+        <div style={{ marginBottom: 24 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "#5a7a5a", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Password</label>
+          <input type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+        </div>
+        <button className="eco-btn" style={{ width: "100%", textAlign: "center" }} onClick={handleSubmit}>
+          {mode === "login" ? "🔑 Sign In" : "🌱 Create Account"}
+        </button>
+      </div>
+
+      <div style={{ textAlign: "center", marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>— or —</div>
+        <button onClick={demoLogin} style={{ background: "white", border: "1.5px solid #dde8dd", borderRadius: 12, padding: "12px 20px", width: "100%", fontSize: 14, color: "#2d7a3a", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>G</span> Continue with Google (Demo)
+        </button>
+      </div>
+
+      <p style={{ textAlign: "center", fontSize: 13, color: "#7a9a7a" }}>
+        {mode === "login" ? "Don't have an account? " : "Already have an account? "}
+        <span style={{ color: "#2d7a3a", fontWeight: 600, cursor: "pointer" }} onClick={() => setMode(mode === "login" ? "signup" : "login")}>
+          {mode === "login" ? "Sign up" : "Sign in"}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+// ─── DISPOSE PAGE ──────────────────────────────────────────────────────────
+function DisposePage({ currentUser, setPage, setAuthMode, submitDisposal, logs }) {
+  const [wasteType, setWasteType] = useState("dry");
+  const [weight, setWeight] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [lastPoints, setLastPoints] = useState(0);
+
+  if (!currentUser) {
+    return (
+      <div style={{ padding: "60px 24px", textAlign: "center" }} className="slide-up">
+        <div style={{ fontSize: 60, marginBottom: 20 }}>📱</div>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: "#1a3d1f", marginBottom: 12 }}>Scan & Earn Points</h2>
+        <p style={{ color: "#7a9a7a", fontSize: 14, marginBottom: 28, lineHeight: 1.6 }}>Sign in to log your waste disposal and start earning green reward points.</p>
+        <button className="eco-btn" onClick={() => { setAuthMode("login"); setPage("auth"); }} style={{ marginBottom: 12, display: "block", width: "100%" }}>Sign In to Continue</button>
+        <button className="eco-btn outline" onClick={() => { setAuthMode("signup"); setPage("auth"); }} style={{ display: "block", width: "100%" }}>Create Free Account</button>
+      </div>
+    );
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayLogs = logs.filter(l => l.userId === currentUser.id && l.timestamp.startsWith(today));
+  const remaining = MAX_DAILY_SUBMISSIONS - todayLogs.length;
+  const estPoints = weight ? calcPoints(parseInt(weight) || 0) : 0;
+
+  const handleSubmit = () => {
+    const w = parseInt(weight);
+    if (!w || w <= 0) return;
+    const pts = calcPoints(w);
+    const success = submitDisposal(wasteType, w);
+    if (success) { setLastPoints(pts); setSubmitted(true); setWeight(""); }
+  };
+
+  if (submitted) {
+    return (
+      <div style={{ padding: "40px 24px", textAlign: "center" }} className="slide-up">
+        <div style={{ width: 100, height: 100, background: "#eaf4eb", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 50, margin: "0 auto 24px" }}>✅</div>
+        <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#1a3d1f", marginBottom: 8 }}>Great Job!</h2>
+        <div style={{ fontSize: 40, fontWeight: 700, color: "#2d7a3a", marginBottom: 8 }}>+{lastPoints} pts</div>
+        <p style={{ color: "#7a9a7a", fontSize: 14, marginBottom: 28 }}>You've earned {lastPoints} points for responsible waste disposal 🌿</p>
+        <button className="eco-btn" onClick={() => setSubmitted(false)} style={{ marginBottom: 12, display: "block", width: "100%" }}>Log Another</button>
+        <button className="eco-btn outline" onClick={() => setPage("rewards")} style={{ display: "block", width: "100%" }}>View Rewards</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="slide-up" style={{ padding: "20px 16px" }}>
+      <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#1a3d1f", marginBottom: 4 }}>Log Disposal ♻️</h2>
+      <p style={{ color: "#7a9a7a", fontSize: 13, marginBottom: 20 }}>You have {remaining} submission{remaining !== 1 ? "s" : ""} remaining today</p>
+
+      {/* Remaining bar */}
+      <div className="card" style={{ marginBottom: 20, padding: "16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: 12, color: "#7a9a7a", fontWeight: 600 }}>Daily Limit</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: remaining > 0 ? "#2d7a3a" : "#e24b4a" }}>{todayLogs.length}/{MAX_DAILY_SUBMISSIONS}</span>
+        </div>
+        <div className="progress-bar"><div className="progress-fill" style={{ width: `${(todayLogs.length / MAX_DAILY_SUBMISSIONS) * 100}%`, background: remaining > 0 ? undefined : "#e24b4a" }} /></div>
+      </div>
+
+      {/* Waste Type */}
+      <div style={{ marginBottom: 20 }}>
+        <label style={{ fontSize: 12, fontWeight: 700, color: "#5a7a5a", display: "block", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Select Waste Type</label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          {WASTE_TYPES.map(wt => (
+            <div key={wt.id} className={`waste-chip ${wasteType === wt.id ? "selected" : ""}`} onClick={() => setWasteType(wt.id)} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 28, marginBottom: 4 }}>{wt.icon}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#1a3d1f" }}>{wt.label}</div>
+              <div style={{ fontSize: 10, color: "#7a9a7a", marginTop: 2 }}>{wt.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Weight Input */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <label style={{ fontSize: 12, fontWeight: 700, color: "#5a7a5a", display: "block", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Weight (grams)</label>
+        <input type="number" placeholder="e.g. 500" value={weight} onChange={e => setWeight(e.target.value)} min={1} max={MAX_WEIGHT_GRAMS} />
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
+          <span style={{ fontSize: 11, color: "#aaa" }}>Max: {MAX_WEIGHT_GRAMS}g per entry</span>
+          {estPoints > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: "#2d7a3a" }}>~{estPoints} pts to earn</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          {[100, 250, 500, 1000].map(g => (
+            <button key={g} onClick={() => setWeight(g)} style={{ flex: 1, background: weight == g ? "#2d7a3a" : "#f0f7f0", color: weight == g ? "white" : "#2d7a3a", border: "1.5px solid #c5e0c5", borderRadius: 8, padding: "6px 0", fontSize: 12, fontWeight: 600 }}>{g}g</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tip */}
+      <div style={{ background: "#fffbf0", border: "1px solid #f0e0aa", borderRadius: 12, padding: "12px 14px", marginBottom: 20, display: "flex", gap: 10 }}>
+        <span>💡</span>
+        <span style={{ fontSize: 12, color: "#7a5a1a", lineHeight: 1.5 }}>{AWARENESS_TIPS[Math.floor(Math.random() * AWARENESS_TIPS.length)]}</span>
+      </div>
+
+      <button className="eco-btn" onClick={handleSubmit} disabled={remaining === 0 || !weight} style={{ width: "100%", textAlign: "center", opacity: (remaining === 0 || !weight) ? 0.5 : 1 }}>
+        {remaining === 0 ? "Daily Limit Reached" : "Submit Disposal"}
+      </button>
+
+      {/* Today's logs */}
+      {todayLogs.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a3d1f", marginBottom: 12 }}>Today's Submissions</h3>
+          {todayLogs.map(l => {
+            const wt = WASTE_TYPES.find(w => w.id === l.wasteType);
+            return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "white", borderRadius: 12, marginBottom: 8, border: "1px solid #eaf4eb" }}>
+                <span style={{ fontSize: 22 }}>{wt?.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a3d1f" }}>{wt?.label}</div>
+                  <div style={{ fontSize: 11, color: "#7a9a7a" }}>{l.weightGrams}g</div>
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#2d7a3a" }}>+{l.points} pts</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── REWARDS PAGE ──────────────────────────────────────────────────────────
+function RewardsPage({ currentUser, rewards, redeemReward, setPage }) {
+  const [filter, setFilter] = useState("All");
+  const categories = ["All", ...new Set(rewards.map(r => r.category))];
+
+  return (
+    <div className="slide-up" style={{ padding: "20px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#1a3d1f" }}>Rewards 🎁</h2>
+        {currentUser && <span className="stat-pill">🌟 {currentUser.points} pts</span>}
+      </div>
+      <p style={{ color: "#7a9a7a", fontSize: 13, marginBottom: 20 }}>Redeem your eco-points for campus rewards</p>
+
+      {!currentUser && (
+        <div style={{ background: "#eaf4eb", borderRadius: 16, padding: "20px", textAlign: "center", marginBottom: 20 }}>
+          <p style={{ fontSize: 14, color: "#1a3d1f", marginBottom: 12 }}>Sign in to redeem rewards!</p>
+          <button className="eco-btn" style={{ fontSize: 13 }} onClick={() => setPage("auth")}>Sign In</button>
+        </div>
+      )}
+
+      {/* Category Filter */}
+      <div style={{ display: "flex", gap: 8, overflowX: "auto", marginBottom: 20, paddingBottom: 4 }}>
+        {categories.map(c => (
+          <button key={c} onClick={() => setFilter(c)} style={{ background: filter === c ? "#2d7a3a" : "white", color: filter === c ? "white" : "#2d7a3a", border: "1.5px solid #c5e0c5", borderRadius: 50, padding: "6px 16px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }}>{c}</button>
+        ))}
+      </div>
+
+      {/* Rewards Grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {rewards.filter(r => filter === "All" || r.category === filter).map(reward => {
+          const canAfford = currentUser && currentUser.points >= reward.points;
+          const outOfStock = reward.stock <= 0;
+          return (
+            <div key={reward.id} className="card" style={{ opacity: outOfStock ? 0.6 : 1, position: "relative", overflow: "hidden" }}>
+              {reward.stock <= 3 && reward.stock > 0 && (
+                <div style={{ position: "absolute", top: 10, right: 10, background: "#fff3e0", color: "#e65100", fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 50, textTransform: "uppercase", letterSpacing: 0.5 }}>Low Stock</div>
+              )}
+              <div style={{ fontSize: 36, marginBottom: 10 }}>{reward.icon}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3d1f", marginBottom: 4, lineHeight: 1.3 }}>{reward.name}</div>
+              <div style={{ fontSize: 11, color: "#7a9a7a", marginBottom: 12 }}>{reward.stock} available</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: "#2d7a3a" }}>⭐ {reward.points}</span>
+                <button onClick={() => redeemReward(reward)} disabled={!canAfford || outOfStock} style={{ background: canAfford && !outOfStock ? "#2d7a3a" : "#e0e8e0", color: canAfford && !outOfStock ? "white" : "#aaa", border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 700, cursor: canAfford && !outOfStock ? "pointer" : "not-allowed" }}>
+                  {outOfStock ? "Sold Out" : "Redeem"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* How it works */}
+      <div className="card" style={{ marginTop: 24 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a3d1f", marginBottom: 12 }}>📋 How Points Work</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          {[["1 kg disposed", "= 10 pts"], ["500g disposed", "= 5 pts"], ["Quiz completion", "+5 pts bonus"], ["First signup", "+10 pts bonus"]].map(([k, v]) => (
+            <div key={k} style={{ background: "#f8faf8", borderRadius: 10, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, color: "#7a9a7a" }}>{k}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#2d7a3a" }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── LEARN PAGE ────────────────────────────────────────────────────────────
+function LearnPage({ currentUser, users, setUsers, setCurrentUser, showToast }) {
+  const [tab, setTab] = useState("guide");
+  const [quizIdx, setQuizIdx] = useState(0);
+  const [selected, setSelected] = useState(null);
+  const [score, setScore] = useState(0);
+  const [done, setDone] = useState(false);
+  const [quizRewarded, setQuizRewarded] = useState(() => getStorage("swrs_quiz_done", false));
+
+  const answer = (idx) => {
+    if (selected !== null) return;
+    setSelected(idx);
+    if (idx === QUIZ_QUESTIONS[quizIdx].answer) setScore(s => s + 1);
+    setTimeout(() => {
+      if (quizIdx + 1 >= QUIZ_QUESTIONS.length) setDone(true);
+      else { setQuizIdx(i => i + 1); setSelected(null); }
+    }, 1200);
+  };
+
+  const finishQuiz = () => {
+    if (!quizRewarded && currentUser && score >= 3) {
+      setUsers(us => us.map(u => u.id === currentUser.id ? { ...u, points: u.points + 5 } : u));
+      setCurrentUser(cu => ({ ...cu, points: cu.points + 5 }));
+      setQuizRewarded(true);
+      setStorage("swrs_quiz_done", true);
+      showToast("🎉 +5 bonus points for acing the quiz!");
+    }
+    setDone(true);
+  };
+
+  const tabs = [
+    { id: "guide", label: "📖 Guide" },
+    { id: "quiz", label: "🧠 Quiz" },
+    { id: "impact", label: "🌍 Impact" },
+  ];
+
+  return (
+    <div className="slide-up" style={{ padding: "20px 16px" }}>
+      <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#1a3d1f", marginBottom: 4 }}>Learn & Earn 📚</h2>
+      <p style={{ color: "#7a9a7a", fontSize: 13, marginBottom: 20 }}>Master waste segregation. Complete the quiz for bonus points!</p>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 24, background: "white", padding: "6px", borderRadius: 16 }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 10, background: tab === t.id ? "#2d7a3a" : "transparent", color: tab === t.id ? "white" : "#7a9a7a", border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* GUIDE TAB */}
+      {tab === "guide" && (
+        <div>
+          {[
+            { icon: "📄", color: "#fff8e8", accent: "#c8a87a", title: "Dry Waste", items: ["Paper & cardboard", "Metal cans & foil", "Glass bottles", "Fabric & leather", "Electronic waste"], tip: "Keep dry waste clean and separate from food residue." },
+            { icon: "🥬", color: "#eaf4eb", accent: "#2d7a3a", title: "Wet Waste", items: ["Food scraps & peels", "Cooked leftovers", "Tea bags & coffee grounds", "Garden waste", "Egg shells"], tip: "Wet waste can be composted to enrich soil naturally." },
+            { icon: "♻️", color: "#e8f4fb", accent: "#4a90d9", title: "Plastic Waste", items: ["Water & beverage bottles", "Plastic bags", "Packaging materials", "Straws & cups", "Plastic containers"], tip: "Rinse and crush plastic before disposal to save space." },
+            { icon: "⚠️", color: "#fff0f0", accent: "#e24b4a", title: "Hazardous Waste", items: ["Batteries & electronics", "Chemicals & solvents", "Medicines & syringes", "Paint & aerosols", "Fluorescent bulbs"], tip: "Never mix hazardous waste with regular bins. Use designated collection points." },
+          ].map(wt => (
+            <div key={wt.title} className="card" style={{ marginBottom: 16, background: wt.color, border: `1.5px solid ${wt.accent}30` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                <div style={{ width: 48, height: 48, background: "white", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>{wt.icon}</div>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3d1f" }}>{wt.title}</div>
+                  <div style={{ fontSize: 11, color: wt.accent, fontWeight: 600 }}>TAP TO EXPAND</div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
+                {wt.items.map(item => (
+                  <div key={item} style={{ fontSize: 12, color: "#3a5a3a", background: "rgba(255,255,255,0.7)", borderRadius: 8, padding: "5px 10px" }}>• {item}</div>
+                ))}
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.8)", borderRadius: 10, padding: "8px 12px", display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span>💡</span>
+                <span style={{ fontSize: 12, color: "#3a5a3a", lineHeight: 1.5 }}>{wt.tip}</span>
+              </div>
+            </div>
+          ))}
+
+          {/* Tips Grid */}
+          <div className="card">
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a3d1f", marginBottom: 14 }}>🌟 Quick Tips</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+              {AWARENESS_TIPS.map((tip, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <div style={{ width: 24, height: 24, background: "#eaf4eb", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#2d7a3a", flexShrink: 0 }}>{i + 1}</div>
+                  <span style={{ fontSize: 13, color: "#3a5a3a", lineHeight: 1.5, paddingTop: 3 }}>{tip}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QUIZ TAB */}
+      {tab === "quiz" && (
+        <div>
+          {!done ? (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <span style={{ fontSize: 13, color: "#7a9a7a" }}>Question {quizIdx + 1} of {QUIZ_QUESTIONS.length}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#2d7a3a" }}>Score: {score}</span>
+              </div>
+              <div className="progress-bar" style={{ marginBottom: 24 }}><div className="progress-fill" style={{ width: `${((quizIdx) / QUIZ_QUESTIONS.length) * 100}%` }} /></div>
+              <div className="card" style={{ marginBottom: 20, background: "#eaf4eb", border: "1.5px solid #c5e0c5" }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3d1f", lineHeight: 1.4 }}>🤔 {QUIZ_QUESTIONS[quizIdx].q}</div>
+              </div>
+              {QUIZ_QUESTIONS[quizIdx].options.map((opt, i) => (
+                <button key={i} className={`quiz-opt ${selected === null ? "" : i === QUIZ_QUESTIONS[quizIdx].answer ? "correct" : selected === i ? "wrong" : ""}`} onClick={() => answer(i)}>
+                  <span style={{ marginRight: 10, fontWeight: 700 }}>{["A", "B", "C", "D"][i]}.</span> {opt}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ textAlign: "center" }} className="slide-up">
+              <div style={{ fontSize: 60, marginBottom: 16 }}>{score >= 4 ? "🏆" : score >= 3 ? "🎉" : "📚"}</div>
+              <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#1a3d1f", marginBottom: 8 }}>Quiz Complete!</h3>
+              <div style={{ fontSize: 36, fontWeight: 700, color: "#2d7a3a", marginBottom: 8 }}>{score}/{QUIZ_QUESTIONS.length}</div>
+              <p style={{ color: "#7a9a7a", fontSize: 14, marginBottom: 24 }}>
+                {score >= 4 ? "Excellent! You're a waste management pro!" : score >= 3 ? "Good job! Keep learning!" : "Keep practicing to become an eco expert!"}
+              </p>
+              {score >= 3 && !quizRewarded && <div style={{ background: "#eaf4eb", borderRadius: 14, padding: "14px", marginBottom: 20 }}><span style={{ fontSize: 14, color: "#1a3d1f", fontWeight: 600 }}>🌟 Claim your 5 bonus points!</span></div>}
+              <button className="eco-btn" onClick={() => { setQuizIdx(0); setSelected(null); setScore(0); setDone(false); if (!quizRewarded && currentUser && score >= 3) finishQuiz(); }} style={{ width: "100%", marginBottom: 10 }}>
+                {score >= 3 && !quizRewarded && currentUser ? "Claim Bonus & Retry" : "Try Again"}
+              </button>
+              {score >= 3 && !quizRewarded && currentUser && (
+                <button className="eco-btn outline" onClick={finishQuiz} style={{ width: "100%" }}>Claim Bonus Points</button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* IMPACT TAB */}
+      {tab === "impact" && (
+        <div>
+          {[
+            { icon: "🌊", title: "Ocean Pollution", stat: "8M tons", desc: "of plastic enter oceans every year. Proper disposal can prevent this." },
+            { icon: "🌡️", title: "Methane Emissions", stat: "5% of GHGs", desc: "come from landfills. Composting wet waste reduces emissions significantly." },
+            { icon: "💧", title: "Groundwater", stat: "50% at risk", desc: "of groundwater sources are threatened by improper hazardous waste disposal." },
+            { icon: "♻️", title: "Recycling Benefit", stat: "95% energy saved", desc: "when recycling aluminum vs. producing from raw materials." },
+          ].map(fact => (
+            <div key={fact.title} className="card" style={{ marginBottom: 14, display: "flex", gap: 16, alignItems: "flex-start" }}>
+              <div style={{ width: 52, height: 52, background: "#eaf4eb", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>{fact.icon}</div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3d1f", marginBottom: 2 }}>{fact.title}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#2d7a3a", marginBottom: 4 }}>{fact.stat}</div>
+                <div style={{ fontSize: 12, color: "#7a9a7a", lineHeight: 1.5 }}>{fact.desc}</div>
+              </div>
+            </div>
+          ))}
+
+          <div className="card" style={{ background: "linear-gradient(135deg, #1a3d1f, #2d7a3a)", marginTop: 8 }}>
+            <h3 style={{ color: "white", fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Your Potential Impact</h3>
+            <p style={{ color: "#c5e8c8", fontSize: 13, lineHeight: 1.6 }}>If every student on campus recycled just 500g per week, we could collectively divert over 2 tonnes of waste from landfills every month. Start your contribution today!</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PROFILE PAGE ──────────────────────────────────────────────────────────
+function ProfilePage({ currentUser, users, logs, logout, setPage }) {
+  if (!currentUser) return null;
+  const userLogs = logs.filter(l => l.userId === currentUser.id);
+  const totalWaste = userLogs.reduce((s, l) => s + l.weightGrams, 0);
+  const rank = [...users].sort((a, b) => b.points - a.points).findIndex(u => u.id === currentUser.id) + 1;
+  const level = currentUser.points < 100 ? { name: "Eco Newcomer", icon: "🌱", next: 100 } : currentUser.points < 300 ? { name: "Green Warrior", icon: "🌿", next: 300 } : currentUser.points < 600 ? { name: "Eco Champion", icon: "🌳", next: 600 } : { name: "Planet Guardian", icon: "🌍", next: 1000 };
+
+  return (
+    <div className="slide-up" style={{ padding: "20px 16px" }}>
+      {/* Profile Card */}
+      <div className="card" style={{ background: "linear-gradient(135deg, #1a3d1f, #2d7a3a)", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+          <div className="avatar" style={{ width: 60, height: 60, fontSize: 20, background: "rgba(255,255,255,0.2)", border: "2px solid rgba(255,255,255,0.3)" }}>{currentUser.avatar}</div>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "white" }}>{currentUser.name}</div>
+            <div style={{ fontSize: 12, color: "#c5e8c8" }}>{currentUser.email}</div>
+            <div style={{ fontSize: 12, color: "#a8e6b0", marginTop: 4 }}>🏅 Rank #{rank} on campus</div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          {[["⭐ Points", currentUser.points], ["♻️ kg Recycled", (totalWaste / 1000).toFixed(1)], ["📊 Logs", userLogs.length]].map(([k, v]) => (
+            <div key={k} style={{ background: "rgba(255,255,255,0.12)", borderRadius: 12, padding: "12px 8px", textAlign: "center" }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "white" }}>{v}</div>
+              <div style={{ fontSize: 10, color: "#c5e8c8", marginTop: 2 }}>{k}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Level Progress */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div>
+            <span style={{ fontSize: 24 }}>{level.icon}</span>
+            <span style={{ fontSize: 15, fontWeight: 700, color: "#1a3d1f", marginLeft: 8 }}>{level.name}</span>
+          </div>
+          <span style={{ fontSize: 12, color: "#7a9a7a" }}>{currentUser.points}/{level.next} pts</span>
+        </div>
+        <div className="progress-bar"><div className="progress-fill" style={{ width: `${Math.min(100, (currentUser.points / level.next) * 100)}%` }} /></div>
+        <div style={{ fontSize: 11, color: "#7a9a7a", marginTop: 6 }}>{level.next - currentUser.points} pts to next level</div>
+      </div>
+
+      {/* Recent Activity */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a3d1f", marginBottom: 14 }}>Recent Activity</h3>
+        {userLogs.length === 0 && <p style={{ fontSize: 13, color: "#7a9a7a" }}>No disposal logs yet. Start recycling to earn points!</p>}
+        {userLogs.slice(0, 5).map(l => {
+          const wt = WASTE_TYPES.find(w => w.id === l.wasteType);
+          return (
+            <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #f0f5f0" }}>
+              <span style={{ fontSize: 22 }}>{wt?.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1a3d1f" }}>{wt?.label} — {l.weightGrams}g</div>
+                <div style={{ fontSize: 11, color: "#7a9a7a" }}>{new Date(l.timestamp).toLocaleDateString()}</div>
+              </div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#2d7a3a" }}>+{l.points}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <button className="eco-btn" onClick={() => setPage("rewards")} style={{ width: "100%", marginBottom: 12, textAlign: "center" }}>🎁 View Rewards</button>
+      <button className="eco-btn outline" onClick={logout} style={{ width: "100%", textAlign: "center" }}>Sign Out</button>
+    </div>
+  );
+}
+
+// ─── ADMIN PAGE ─────────────────────────────────────────────────────────────
+function AdminPage({ users, setUsers, logs, rewards, setRewards, currentUser, setCurrentUser, showToast }) {
+  const [tab, setTab] = useState("users");
+  const [editPoints, setEditPoints] = useState({});
+  const [newReward, setNewReward] = useState({ name: "", points: "", icon: "🎁", category: "Food", stock: 10 });
+  const [editingReward, setEditingReward] = useState(null);
+
+  const adjustPoints = (userId, delta) => {
+    setUsers(us => us.map(u => u.id === userId ? { ...u, points: Math.max(0, u.points + delta) } : u));
+    if (currentUser?.id === userId) setCurrentUser(cu => ({ ...cu, points: Math.max(0, cu.points + delta) }));
+    showToast(`Points adjusted by ${delta > 0 ? "+" : ""}${delta}`);
+  };
+
+  const addReward = () => {
+    if (!newReward.name || !newReward.points) return;
+    setRewards(rs => [...rs, { id: genId(), ...newReward, points: parseInt(newReward.points), stock: parseInt(newReward.stock) }]);
+    setNewReward({ name: "", points: "", icon: "🎁", category: "Food", stock: 10 });
+    showToast("Reward added!");
+  };
+
+  const removeReward = (id) => { setRewards(rs => rs.filter(r => r.id !== id)); showToast("Reward removed."); };
+
+  const tabs = [
+    { id: "users", label: "👥 Users" },
+    { id: "logs", label: "📋 Logs" },
+    { id: "rewards", label: "🎁 Rewards" },
+  ];
+
+  return (
+    <div className="slide-up" style={{ padding: "20px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <div style={{ background: "#e24b4a20", borderRadius: 10, padding: "6px 10px" }}>⚙️</div>
+        <div>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 20, fontWeight: 700, color: "#1a3d1f" }}>Admin Panel</h2>
+          <div style={{ fontSize: 11, color: "#7a9a7a" }}>Manage users, logs & rewards</div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, background: "white", padding: "6px", borderRadius: 16 }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 10, background: tab === t.id ? "#2d7a3a" : "transparent", color: tab === t.id ? "white" : "#7a9a7a", border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === "users" && (
+        <div>
+          {users.sort((a, b) => b.points - a.points).map(u => (
+            <div key={u.id} className="card" style={{ marginBottom: 12, padding: "14px 16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                <div className="avatar" style={{ background: "#2d7a3a", fontSize: 11 }}>{u.avatar}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3d1f" }}>{u.name}</div>
+                  <div style={{ fontSize: 11, color: "#7a9a7a" }}>{u.email}</div>
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#2d7a3a" }}>⭐ {u.points}</div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <input type="number" placeholder="Manual pts" value={editPoints[u.id] || ""} onChange={e => setEditPoints(ep => ({ ...ep, [u.id]: e.target.value }))} style={{ padding: "8px 10px", fontSize: 12 }} />
+                <button onClick={() => { if (editPoints[u.id]) { adjustPoints(u.id, parseInt(editPoints[u.id])); setEditPoints(ep => ({ ...ep, [u.id]: "" })); } }} style={{ background: "#2d7a3a", color: "white", borderRadius: 8, padding: "8px", fontSize: 12, fontWeight: 600 }}>Add</button>
+                <button onClick={() => { if (editPoints[u.id]) { adjustPoints(u.id, -parseInt(editPoints[u.id])); setEditPoints(ep => ({ ...ep, [u.id]: "" })); } }} style={{ background: "#e24b4a", color: "white", borderRadius: 8, padding: "8px", fontSize: 12, fontWeight: 600 }}>Deduct</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "logs" && (
+        <div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <div className="card" style={{ flex: "1", minWidth: 80, textAlign: "center", padding: "12px 8px" }}><div style={{ fontSize: 20, fontWeight: 700, color: "#2d7a3a" }}>{logs.length}</div><div style={{ fontSize: 10, color: "#7a9a7a" }}>Total Logs</div></div>
+            <div className="card" style={{ flex: "1", minWidth: 80, textAlign: "center", padding: "12px 8px" }}><div style={{ fontSize: 20, fontWeight: 700, color: "#2d7a3a" }}>{(logs.reduce((s, l) => s + l.weightGrams, 0) / 1000).toFixed(1)}kg</div><div style={{ fontSize: 10, color: "#7a9a7a" }}>Total Waste</div></div>
+            <div className="card" style={{ flex: "1", minWidth: 80, textAlign: "center", padding: "12px 8px" }}><div style={{ fontSize: 20, fontWeight: 700, color: "#2d7a3a" }}>{logs.reduce((s, l) => s + l.points, 0)}</div><div style={{ fontSize: 10, color: "#7a9a7a" }}>Pts Awarded</div></div>
+          </div>
+          {logs.slice(0, 15).map(l => {
+            const user = users.find(u => u.id === l.userId);
+            const wt = WASTE_TYPES.find(w => w.id === l.wasteType);
+            return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "white", borderRadius: 12, marginBottom: 8, fontSize: 13 }}>
+                <span style={{ fontSize: 18 }}>{wt?.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontWeight: 600, color: "#1a3d1f" }}>{user?.name?.split(" ")[0] || "?"}</span>
+                  <span style={{ color: "#7a9a7a" }}> · {wt?.label} · {l.weightGrams}g</span>
+                </div>
+                <span style={{ fontWeight: 700, color: "#2d7a3a", fontSize: 12 }}>+{l.points}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {tab === "rewards" && (
+        <div>
+          {/* Add Reward Form */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a3d1f", marginBottom: 14 }}>Add New Reward</h3>
+            <input type="text" placeholder="Reward name" value={newReward.name} onChange={e => setNewReward(r => ({ ...r, name: e.target.value }))} style={{ marginBottom: 10 }} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <input type="number" placeholder="Points required" value={newReward.points} onChange={e => setNewReward(r => ({ ...r, points: e.target.value }))} />
+              <input type="number" placeholder="Stock" value={newReward.stock} onChange={e => setNewReward(r => ({ ...r, stock: e.target.value }))} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+              <input type="text" placeholder="Icon (emoji)" value={newReward.icon} onChange={e => setNewReward(r => ({ ...r, icon: e.target.value }))} />
+              <select value={newReward.category} onChange={e => setNewReward(r => ({ ...r, category: e.target.value }))}>
+                {["Food", "Voucher", "Gift"].map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <button className="eco-btn" onClick={addReward} style={{ width: "100%", textAlign: "center", fontSize: 13 }}>+ Add Reward</button>
+          </div>
+
+          {rewards.map(r => (
+            <div key={r.id} className="card" style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 28 }}>{r.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3d1f" }}>{r.name}</div>
+                <div style={{ fontSize: 11, color: "#7a9a7a" }}>⭐ {r.points} pts · {r.stock} in stock</div>
+              </div>
+              <button onClick={() => removeReward(r.id)} style={{ background: "#fdf0f0", color: "#e24b4a", border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 600 }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
